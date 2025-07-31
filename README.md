@@ -22,6 +22,38 @@ pnpm install
 pnpm tauri dev
 ```
 
+## Forking
+
+If you want to contribute to the project, you'll need to fork the repository and set up the remotes correctly. Here's how:
+
+1.  **Fork the repository:** Use the `gh` command-line tool to fork the repository to your own GitHub account.
+
+    ```bash
+    gh repo fork Piebald-AI/gemini-desktop --clone=false
+    ```
+
+2.  **Update the remotes:** Set the `origin` remote to your newly created fork and add the original repository as the `upstream` remote.
+
+    ```bash
+    git remote set-url origin https://github.com/YOUR_USERNAME/gemini-desktop.git
+    git remote add upstream https://github.com/Piebald-AI/gemini-desktop.git
+    ```
+
+3.  **Verify the remotes:** You can verify that the remotes are set up correctly by running the following command:
+
+    ```bash
+    git remote -v
+    ```
+
+    You should see something like this:
+
+    ```
+    origin  https://github.com/YOUR_USERNAME/gemini-desktop.git (fetch)
+    origin  https://github.com/YOUR_USERNAME/gemini-desktop.git (push)
+    upstream        https://github.com/Piebald-AI/gemini-desktop.git (fetch)
+    upstream        https://github.com/Piebald-AI/gemini-desktop.git (push)
+    ```
+
 ## Features
 
 - Choose between models (Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.5 Flash-Lite)
