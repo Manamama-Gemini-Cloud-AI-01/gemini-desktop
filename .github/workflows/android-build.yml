@@ -24,12 +24,6 @@ jobs:
         with:
           version: 8
 
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Install pnpm
-        run: npm install -g pnpm
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -38,6 +32,7 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install
+        working-directory: ./
 
       - name: Build Android APK
         run: |
