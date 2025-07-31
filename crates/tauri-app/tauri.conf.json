@@ -38,6 +38,12 @@
     "withGlobalTauri": false
   },
   "plugins": {},
+  "android": {
+    "active": true,
+    "targets": [
+      "aarch64-linux-android"
+    ]
+  },
   "bundle": {
     "active": true,
     "targets": "all",
