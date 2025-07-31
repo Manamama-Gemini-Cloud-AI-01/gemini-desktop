@@ -1,6 +1,6 @@
 # Proposed Installation and Testing Plan
 
-**Version:** 1.2 (Updated to include GitHub Actions build plan)
+**Version:** 1.4 (Updated with detailed build report and corrected workflow)
 
 This document outlines an agreed-upon plan to install, build, and test the Gemini Desktop application, taking into account the specific environment.
 
@@ -128,3 +128,130 @@ pnpm tauri dev
     *   Error Handling: Application's response to errors.
 
 This structured approach ensures that all prerequisites are met and potential issues are handled systematically.
+
+## Build Attempt Report (2025-07-31)
+
+This report details the attempts to build the Android APK, the errors encountered, and the lessons learned.
+
+### Initial Failures and Lessons Learned
+
+The initial attempts to build the Android APK directly in the Termux environment failed with the error `Cannot find module '@tauri-apps/cli-android-arm64'`. This led to the following insights:
+
+*   **Tauri CLI for Android:** The Tauri CLI dynamically loads platform-specific helper packages for different target architectures. In this case, it was looking for a package for Android on ARM64, which was not installed.
+*   **NDK Requirement:** The Android NDK (Native Development Kit) is a crucial dependency for building Tauri apps for Android, as it's used to compile the Rust code.
+*   **`tauri.conf.json`:** The `tauri.conf.json` file was missing the `android` section, which is required to configure the Android build.
+
+### GitHub Actions Workflow Failures
+
+After pivoting to a GitHub Actions-based build, we encountered a series of failures:
+
+1.  **`actions/upload-artifact@v3` Deprecation:** The initial workflow failed because it used a deprecated version of the `actions/upload-artifact` action. This was resolved by updating to `v4`.
+2.  **`pnpm` Not Found:** The workflow then failed because `pnpm` was not installed. This was resolved by adding a step to install `pnpm` globally using `npm`.
+3.  **Incorrect `pnpm` Setup:** The workflow continued to fail with the error `ERR_PNPM_NO_PKG_MANIFEST No package.json found`. This was due to an incorrect understanding of how to use the `pnpm/action-setup` and `actions/setup-node` actions together.
+
+### Google Search AI Consultation
+
+After repeated failures, I consulted the Google Search AI with a detailed, natural-language query. The key takeaways from this consultation were:
+
+*   **`working-directory` is Crucial:** The `ERR_PNPM_NO_PKG_MANIFEST` error was caused by the `pnpm install` command being run in the wrong directory. The `actions/checkout` action checks out the repository to a nested directory, and the `working-directory` parameter is required to execute commands in the correct location.
+*   **Best-Practice Workflow:** The search results provided a complete, best-practice YAML example for building a Tauri Android app with pnpm, including the correct use of `pnpm/action-setup`, `actions/setup-node`, and `working-directory`.
+
+### Current Status
+
+I am now implementing the best-practice workflow provided by the Google Search AI. I am confident that this approach will resolve the build issues and produce a successful Android APK.
+
+### Corrected Workflow
+
+```yaml
+name: Build Tauri Android
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: # Allows manual triggering
+
+env:
+  # Set environment variables for Android SDK and NDK paths
+  ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+  ANDROID_NDK_HOME: ${{ github.workspace }}/android-sdk/ndk/25.2.9519653 # Or your preferred NDK version
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Use an LTS version suitable for Tauri
+          cache: 'pnpm' # Enable pnpm caching
+          cache-dependency-path: './pnpm-lock.yaml' # Path to your pnpm-lock.yaml
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+          run_install: false
+
+      - name: Get pnpm store directory
+        id: pnpm-cache-dir
+        shell: bash
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Java Development Kit
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: "${{ runner.os }}-rust-${{ hashFiles('**/Cargo.lock') }}"
+          restore-keys: |
+            ${{ runner.os }}-rust-
+
+      - name: Build Tauri Android App
+        run: pnpm tauri build --target aarch64-linux-android --release
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-android-app
+          path: src-tauri/target/aarch64-linux-android/release/*.apk
+```
