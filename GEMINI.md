@@ -80,4 +80,14 @@ The error indicates that the `@tauri-apps/cli` package is missing the native bin
 
 Tauri does not officially support on-device development in Termux. The Termux environment uses a different `libc` than standard Linux distributions, which prevents the correct installation of the required native modules for the `android-arm64` architecture.
 
-The recommended solution is to switch to a desktop operating system (Linux, macOS, or Windows) for development and cross-compile for Android from there.
+The recommended solution is to switch to a desktop operating system (Linux, macOS, or Windows) for development and cross-compile for Android from there.  
+
+
+Error:
+
+Solved by:
+
+`RUSTUP_USE_RUSTLS=0 
+
+`thread 'main' panicked at /cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustls-platform-verifier-0.5.2/src/android.rs:87:10:
+Expect rustls-platform-verifier to be initialized
