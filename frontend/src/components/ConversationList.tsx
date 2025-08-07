@@ -10,7 +10,6 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "./ui/dialog";
-import { Input } from "./ui/input";
 import {
   Select,
   SelectContent,
@@ -23,13 +22,12 @@ import {
   X,
   MessageCircle,
   Clock,
-  Check,
-  X as XIcon,
-  Folder,
   AlertTriangle,
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useState, useCallback } from "react";
+import { webApi, SearchResult, SearchFilters } from "../lib/webApi";
+import { SearchInput } from "./SearchInput";
+import { SearchResults } from "./SearchResults";
 
 interface ProcessStatus {
   conversation_id: string;
@@ -58,9 +56,7 @@ interface ConversationListProps {
   processStatuses: ProcessStatus[];
   onConversationSelect: (conversationId: string) => void;
   onKillProcess: (conversationId: string) => void;
-  onWorkingDirectoryChange?: (directory: string, isValid: boolean) => void;
   onModelChange?: (model: string) => void;
-  onHomeDirectoryChange?: (isHomeDirectory: boolean) => void;
 }
 
 export function ConversationList({
@@ -69,21 +65,19 @@ export function ConversationList({
   processStatuses,
   onConversationSelect,
   onKillProcess,
-  onWorkingDirectoryChange,
   onModelChange,
-  onHomeDirectoryChange,
 }: ConversationListProps) {
   const [selectedConversationForEnd, setSelectedConversationForEnd] = useState<{
     id: string;
     title: string;
   } | null>(null);
-  const [workingDirectory, setWorkingDirectory] = useState<string>("");
-  const [isValidDirectory, setIsValidDirectory] = useState<boolean | null>(
-    null
-  );
-  const [isHomeDirectory, setIsHomeDirectory] = useState<boolean>(false);
   const [selectedModel, setSelectedModel] =
     useState<string>("gemini-2.5-flash");
+  
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const getProcessStatus = (conversationId: string) => {
     return processStatuses.find(
@@ -91,58 +85,6 @@ export function ConversationList({
     );
   };
 
-  // Validate directory path using backend
-  useEffect(() => {
-    if (!workingDirectory.trim()) {
-      setIsValidDirectory(null);
-      setIsHomeDirectory(false);
-      onWorkingDirectoryChange?.("", false);
-      onHomeDirectoryChange?.(false);
-      return;
-    }
-
-    const validateDirectory = async () => {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const [isValid, isHome] = await Promise.all([
-          invoke<boolean>("validate_directory", {
-            path: workingDirectory.trim(),
-          }),
-          invoke<boolean>("is_home_directory", {
-            path: workingDirectory.trim(),
-          }),
-        ]);
-        setIsValidDirectory(isValid);
-        setIsHomeDirectory(isHome);
-        onWorkingDirectoryChange?.(workingDirectory.trim(), isValid);
-        onHomeDirectoryChange?.(isHome);
-      } catch {
-        setIsValidDirectory(false);
-        setIsHomeDirectory(false);
-        onWorkingDirectoryChange?.(workingDirectory.trim(), false);
-        onHomeDirectoryChange?.(false);
-      }
-    };
-
-    const timeoutId = setTimeout(validateDirectory, 300); // Debounce validation
-    return () => clearTimeout(timeoutId);
-  }, [workingDirectory, onWorkingDirectoryChange, onHomeDirectoryChange]);
-
-  const handleDirectorySelect = async () => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: "Select Working Directory",
-      });
-
-      if (selected) {
-        setWorkingDirectory(selected);
-      }
-    } catch (error) {
-      console.error("Error opening directory selector:", error);
-    }
-  };
 
   const formatLastUpdated = (date: Date) => {
     const now = new Date();
@@ -157,6 +99,29 @@ export function ConversationList({
     return `${diffDays}d ago`;
   };
 
+  const handleSearch = useCallback(async (query: string, filters?: SearchFilters) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const results = __WEB__ 
+        ? await webApi.search_chats({ query, filters })
+        : await (async () => {
+            const { invoke } = await import("@tauri-apps/api/core");
+            return await invoke<SearchResult[]>("search_chats", { query, filters });
+          })();
+      setSearchResults(results);
+    } catch (error) {
+      console.error("Search failed:", error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }, []); // Empty dependency array since this function doesn't depend on any props or state
+
   return (
     <div className="w-80 bg-neutral-50 dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-700 h-full overflow-y-auto">
       {/* Header */}
@@ -166,9 +131,19 @@ export function ConversationList({
           Conversations
         </h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          {conversations.length} conversation
-          {conversations.length !== 1 ? "s" : ""}
+          {searchQuery.trim() ? `Searching in ${conversations.length} conversation${conversations.length !== 1 ? "s" : ""}` : 
+           `${conversations.length} conversation${conversations.length !== 1 ? "s" : ""}`}
         </p>
+
+        {/* Search Input */}
+        <div className="mt-3">
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            onSearch={handleSearch}
+            isSearching={isSearching}
+          />
+        </div>
 
         {/* Model Selector */}
         <div className="mt-4">
@@ -189,10 +164,7 @@ export function ConversationList({
             <SelectContent>
               <SelectItem value="gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
               <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash</SelectItem>
-              <SelectItem
-                value="gemini-2.5-flash-lite"
-                // disabled
-              >
+              <SelectItem value="gemini-2.5-flash-lite">
                 <div className="flex items-center gap-2">
                   <span>Gemini 2.5 Flash-Lite</span>
                   <Tooltip>
@@ -209,61 +181,18 @@ export function ConversationList({
           </Select>
         </div>
 
-        {/* Working Directory Input */}
-        <div className="mt-4">
-          <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
-            Working Directory
-          </label>
-          <div className="relative">
-            <div className="absolute left-3 top-2.5 text-gray-400">
-              <Folder className="h-4 w-4" />
-            </div>
-            <Input
-              type="text"
-              placeholder="Select working directory..."
-              value={workingDirectory}
-              readOnly
-              onClick={handleDirectorySelect}
-              className="pl-10 pr-10 text-sm cursor-pointer"
-            />
-            <div className="absolute right-3 top-3">
-              {isValidDirectory === null ? null : isValidDirectory ? (
-                <Check className="h-4 w-4 text-green-500" />
-              ) : (
-                <XIcon className="h-4 w-4 text-red-500" />
-              )}
-            </div>
-          </div>
-
-          {/* Validation Status */}
-          {workingDirectory.trim() && (
-            <div className="mt-2 flex items-center gap-2 text-xs">
-              {isValidDirectory === null ? (
-                <span className="text-gray-500">Validating...</span>
-              ) : isValidDirectory ? (
-                <>
-                  <Check className="h-3 w-3 text-green-500" />
-                  <span className="text-green-600 dark:text-green-400">
-                    Valid directory path
-                  </span>
-                </>
-              ) : (
-                <>
-                  <XIcon className="h-3 w-3 text-red-500" />
-                  <span className="text-red-600 dark:text-red-400">
-                    Invalid directory path
-                  </span>
-                </>
-              )}
-            </div>
-          )}
-
-        </div>
       </div>
 
-      {/* Conversation List */}
+      {/* Search Results or Conversation List */}
       <div className="p-3 space-y-2">
-        {conversations.length === 0 ? (
+        {searchQuery.trim() ? (
+          <SearchResults 
+            results={searchResults}
+            isSearching={isSearching}
+            onConversationSelect={onConversationSelect}
+            query={searchQuery}
+          />
+        ) : conversations.length === 0 ? (
           <div className="text-center py-8 text-gray-500 dark:text-gray-400">
             <MessageCircle className="h-12 w-12 mx-auto mb-3 opacity-50" />
             <p>No conversations yet</p>
@@ -285,7 +214,9 @@ export function ConversationList({
                       ? "ring-2 ring-blue-500 bg-blue-50 dark:bg-blue-900/20"
                       : "hover:bg-gray-100 dark:hover:bg-gray-700"
                   }`}
-                  onClick={() => onConversationSelect(conversation.id)}
+                  onClick={async () =>
+                    await onConversationSelect(conversation.id)
+                  }
                 >
                   <CardHeader className="p-3 pb-2 py-0">
                     <div className="flex items-start justify-between gap-2">
@@ -404,6 +335,7 @@ export function ConversationList({
             })
         )}
       </div>
+
     </div>
   );
 }

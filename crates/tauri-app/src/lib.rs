@@ -2,12 +2,13 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // Import backend functionality
 use backend::{
     EventEmitter, GeminiBackend,
-    ProcessStatus
+    ProcessStatus, DirEntry, RecentChat,
+    ProjectsResponse, EnrichedProject,
+    SearchResult, SearchFilters,
 };
 
 // =====================================
@@ -40,8 +41,10 @@ impl EventEmitter for TauriEventEmitter {
 // =====================================
 
 struct AppState {
-    backend: Arc<Mutex<GeminiBackend<TauriEventEmitter>>>,
+    backend: Arc<GeminiBackend<TauriEventEmitter>>,
 }
+
+
 
 // =====================================
 // Tauri Commands (Thin Wrappers)
@@ -49,19 +52,29 @@ struct AppState {
 
 #[tauri::command]
 async fn check_cli_installed(state: State<'_, AppState>) -> Result<bool, String> {
-    let backend = state.backend.lock().await;
-    backend.check_cli_installed().await.map_err(|e| e.to_string())
+    state.backend.check_cli_installed().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn start_session(_session_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    // For compatibility with existing frontend, just check if CLI is installed
-    let backend = state.backend.lock().await;
-    let available = backend.check_cli_installed().await.map_err(|e| e.to_string())?;
-    if available {
-        Ok(())
+async fn start_session(
+    session_id: String, 
+    working_directory: Option<String>,
+    model: Option<String>,
+    state: State<'_, AppState>
+) -> Result<(), String> {
+    // If working_directory is provided, initialize a session with that directory
+    if let Some(working_directory) = working_directory {
+        let model = model.unwrap_or_else(|| "gemini-2.0-flash-exp".to_string());
+        state.backend.initialize_session(session_id, working_directory, model).await
+            .map_err(|e| e.to_string())
     } else {
-        Err("Gemini CLI not available".to_string())
+        // For compatibility with existing frontend, just check if CLI is installed
+        let available = state.backend.check_cli_installed().await.map_err(|e| e.to_string())?;
+        if available {
+            Ok(())
+        } else {
+            Err("Gemini CLI not available".to_string())
+        }
     }
 }
 
@@ -70,21 +83,14 @@ async fn send_message(
     session_id: String,
     message: String,
     conversation_history: String,
-    working_directory: Option<String>,
     model: Option<String>,
     _app_handle: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Initialize session if working directory or model are provided
-    if let (Some(_wd), Some(model_name)) = (working_directory, model) {
-        let backend = state.backend.lock().await;
-        backend.initialize_session(session_id.clone(), None, model_name)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-
-    let backend = state.backend.lock().await;
-    backend.send_message(session_id, message, conversation_history)
+    // Without working directory UI, we do not auto-initialize sessions here.
+    // If a session is needed, user flows elsewhere should handle initialization, or backend will error gracefully.
+    let _ = model; // suppress unused warning
+    state.backend.send_message(session_id, message, conversation_history)
         .await
         .map_err(|e| e.to_string())
 }
@@ -120,14 +126,12 @@ async fn test_gemini_command() -> Result<String, String> {
 
 #[tauri::command]
 async fn get_process_statuses(state: State<'_, AppState>) -> Result<Vec<ProcessStatus>, String> {
-    let backend = state.backend.lock().await;
-    backend.get_process_statuses().map_err(|e| e.to_string())
+    state.backend.get_process_statuses().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn kill_process(conversation_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let backend = state.backend.lock().await;
-    backend.kill_process(&conversation_id).map_err(|e| e.to_string())
+    state.backend.kill_process(&conversation_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -138,8 +142,7 @@ async fn send_tool_call_confirmation_response(
     outcome: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let backend = state.backend.lock().await;
-    backend.handle_tool_confirmation(session_id, request_id, tool_call_id, outcome)
+    state.backend.handle_tool_confirmation(session_id, request_id, tool_call_id, outcome)
         .await
         .map_err(|e| e.to_string())
 }
@@ -149,8 +152,7 @@ async fn execute_confirmed_command(
     command: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let backend = state.backend.lock().await;
-    backend.execute_confirmed_command(command)
+    state.backend.execute_confirmed_command(command)
         .await
         .map_err(|e| e.to_string())
 }
@@ -161,22 +163,75 @@ async fn generate_conversation_title(
     model: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let backend = state.backend.lock().await;
-    backend.generate_conversation_title(message, model)
+    state.backend.generate_conversation_title(message, model)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn validate_directory(path: String, state: State<'_, AppState>) -> Result<bool, String> {
-    let backend = state.backend.lock().await;
-    backend.validate_directory(path).await.map_err(|e| e.to_string())
+    state.backend.validate_directory(path).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn is_home_directory(path: String, state: State<'_, AppState>) -> Result<bool, String> {
-    let backend = state.backend.lock().await;
-    backend.is_home_directory(path).await.map_err(|e| e.to_string())
+    state.backend.is_home_directory(path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_home_directory(state: State<'_, AppState>) -> Result<String, String> {
+    state.backend.get_home_directory().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_parent_directory(path: String, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    state.backend.get_parent_directory(path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_directory_contents(path: String, state: State<'_, AppState>) -> Result<Vec<DirEntry>, String> {
+    state.backend.list_directory_contents(path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_volumes(state: State<'_, AppState>) -> Result<Vec<DirEntry>, String> {
+    state.backend.list_volumes().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_recent_chats(state: State<'_, AppState>) -> Result<Vec<RecentChat>, String> {
+    state.backend.get_recent_chats().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn search_chats(
+    query: String, 
+    filters: Option<SearchFilters>, 
+    state: State<'_, AppState>
+) -> Result<Vec<SearchResult>, String> {
+    state.backend.search_chats(query, filters).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_projects(limit: Option<u32>, offset: Option<u32>, state: State<'_, AppState>) -> Result<ProjectsResponse, String> {
+    let lim = limit.unwrap_or(25);
+    let off = offset.unwrap_or(0);
+    state.backend.list_projects(lim, off).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_enriched_projects(state: State<'_, AppState>) -> Result<Vec<EnrichedProject>, String> {
+    state.backend.list_enriched_projects().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_project(sha256: String, external_root_path: String, state: State<'_, AppState>) -> Result<EnrichedProject, String> {
+    state.backend.get_enriched_project(sha256, external_root_path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_project_discussions(projectId: String, state: State<'_, AppState>) -> Result<Vec<RecentChat>, String> {
+    state.backend.get_project_discussions(&projectId).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -269,7 +324,7 @@ pub fn run() {
             
             // Store in app state
             let app_state = AppState {
-                backend: Arc::new(Mutex::new(backend)),
+                backend: Arc::new(backend),
             };
             app.manage(app_state);
             
@@ -287,7 +342,17 @@ pub fn run() {
             generate_conversation_title,
             validate_directory,
             is_home_directory,
-            debug_environment
+            get_home_directory,
+            get_parent_directory,
+            list_directory_contents,
+            list_volumes,
+            debug_environment,
+            get_recent_chats,
+            search_chats,
+            list_projects,
+            list_enriched_projects,
+            get_project,
+            get_project_discussions
         ]);
 
     builder

@@ -83,11 +83,12 @@ const highlightCache = new Map<
   { content: React.ReactElement; preStyle: string }
 >();
 
-// Create highlighter instance - initialize immediately like original
-const highlighter = await createHighlighter({
+// Create highlighter instance - initialize as promise
+const highlighterPromise = createHighlighter({
   themes: Object.keys(bundledThemes),
-  langs: Object.keys(bundledLanguages),
+  langs: [], // Start with no languages - load on demand
 });
+
 
 const CodeBlock = React.memo(
   ({ code, language }: { code: string; language: string }) => {
@@ -152,6 +153,9 @@ const CodeBlock = React.memo(
 
       const highlightCode = async () => {
         try {
+          // Wait for highlighter to be ready
+          const highlighter = await highlighterPromise;
+          
           // Clear conflicting cache entries to prevent bloat
           const conflictingKeys = Array.from(highlightCache.keys()).filter(
             (key) =>
@@ -159,6 +163,21 @@ const CodeBlock = React.memo(
               key !== cacheKey
           );
           conflictingKeys.forEach((key) => highlightCache.delete(key));
+
+          // Load language if not already loaded
+          if (
+            mappedLanguage !== "text" &&
+            !highlighter.getLoadedLanguages().includes(mappedLanguage)
+          ) {
+            try {
+              await highlighter.loadLanguage(mappedLanguage as BundledLanguage);
+            } catch {
+              // Ignore errors - Shiki will just not highlight (i.e. use the `text` language) for non-existent
+              // languages.
+            }
+
+            if (!isMounted) return;
+          }
 
           // Check if the language is valid before attempting to highlight
           const validLanguage =
@@ -235,8 +254,6 @@ const CodeBlock = React.memo(
       lightTheme,
       darkTheme,
       resolvedTheme,
-      code,
-      language,
     ]);
 
     // Memoize the style object to prevent unnecessary re-renders
@@ -258,15 +275,15 @@ const CodeBlock = React.memo(
         <ContextMenuTrigger asChild>
           <div
             className={cn(
-              "shiki font-mono overflow-hidden max-h-96 border border-current/10 rounded-md text-sm",
+              "shiki font-mono overflow-hidden max-h-96 border border-current/10 rounded-md text-sm my-4",
               "leading-normal [counter-increment:a_0] [&_.line]:before:[counter-increment:a] [&_.line]:before:content-[counter(a)]",
               "[&_.line]:before:mr-6 [&_.line]:before:ml-3 [&_.line]:before:inline-block [&_.line]:before:text-right",
-              "[&_.line]:before:text-black/40 dark:[&_.line]:before:text-white/40 [&_.line]:before:w-4",
+              "[&_.line]:before:text-black/40 dark:[&_.line]:before:text-white/40 [&_.line]:before:min-w-8",
               "max-w-full min-w-0 overflow-x-auto"
             )}
             style={memoizedStyle}
           >
-            <div className="overflow-auto max-h-96 p-2 [&_pre]:focus-visible:outline-none [&_pre]:whitespace-pre-wrap [&_pre]:word-break-keep-all [&_pre]:overflow-wrap-anywhere">
+            <div className="overflow-auto max-h-96 p-2 [&_pre]:focus-visible:outline-none [&_pre]:whitespace-pre [&_pre]:leading-normal">
               {contentToRender}
             </div>
           </div>
@@ -286,5 +303,6 @@ const CodeBlock = React.memo(
 );
 
 CodeBlock.displayName = "CodeBlock";
+
 
 export default CodeBlock;
